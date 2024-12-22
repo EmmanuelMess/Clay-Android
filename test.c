@@ -1,90 +1,19 @@
 //Copyright (c) 2011-2020 <>< Charles Lohr - Under the MIT/x11 or NewBSD License you choose.
+//Copyright (c) 2024-2025 EmmanuelMess - Under the MIT/x11 or NewBSD License you choose.
 // NO WARRANTY! NO GUARANTEE OF SUPPORT! USE AT YOUR OWN RISK
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
-#include <string.h>
 #include "os_generic.h"
-#include <GLES3/gl3.h>
 #include <android/asset_manager.h>
 #include <android/asset_manager_jni.h>
 #include <android_native_app_glue.h>
-#include <android/sensor.h>
 #include <byteswap.h>
 #include <errno.h>
 #include <fcntl.h>
-#include "CNFGAndroid.h"
 
-//#define CNFA_IMPLEMENTATION
-#define CNFG_IMPLEMENTATION
-#define CNFG3D
-
-//#include "cnfa/CNFA.h"
-#include "CNFG.h"
-
-#define WEBVIEW_NATIVE_ACTIVITY_IMPLEMENTATION
-#include "webview_native_activity.h"
-
-float mountainangle;
-float mountainoffsetx;
-float mountainoffsety;
-
-ASensorManager * sm;
-const ASensor * as;
-bool no_sensor_for_gyro = false;
-ASensorEventQueue* aeq;
-ALooper * l;
-
-WebViewNativeActivityObject MyWebView;
-
-const uint32_t SAMPLE_RATE = 44100;
-const uint16_t SAMPLE_COUNT = 512;
-uint32_t stream_offset = 0;
-uint16_t audio_frequency;
-
-void SetupIMU()
-{
-	sm = ASensorManager_getInstanceForPackage("gyroscope");
-	as = ASensorManager_getDefaultSensor( sm, ASENSOR_TYPE_GYROSCOPE );
-	no_sensor_for_gyro = as == NULL;
-	l = ALooper_prepare( ALOOPER_PREPARE_ALLOW_NON_CALLBACKS );
-	aeq = ASensorManager_createEventQueue( sm, (ALooper*)&l, 0, 0, 0 ); //XXX??!?! This looks wrong.
-	if(!no_sensor_for_gyro) {
-		ASensorEventQueue_enableSensor( aeq, as);
-		printf( "setEvent Rate: %d\n", ASensorEventQueue_setEventRate( aeq, as, 10000 ) );
-	}
-
-}
-
-float accx, accy, accz;
-int accs;
-
-void AccCheck()
-{
-	if(no_sensor_for_gyro) {
-		return;
-	}
-
-	ASensorEvent evt;
-	do
-	{
-		ssize_t s = ASensorEventQueue_getEvents( aeq, &evt, 1 );
-		if( s <= 0 ) break;
-		accx = evt.vector.v[0];
-		accy = evt.vector.v[1];
-		accz = evt.vector.v[2];
-		mountainangle /*degrees*/ -= accz;// * 3.1415 / 360.0;// / 100.0;
-		mountainoffsety += accy;
-		mountainoffsetx += accx;
-		accs++;
-	} while( 1 );
-}
-
-unsigned frames = 0;
-unsigned long iframeno = 0;
-
-void AndroidDisplayKeyboard(int pShow);
+// Add clay for UI
+#define CLAY_IMPLEMENTATION
+#include "clay.h"
+#include "clay_renderer_cnfg.c"
 
 int lastbuttonx = 0;
 int lastbuttony = 0;
@@ -93,15 +22,15 @@ int lastmotiony = 0;
 int lastbid = 0;
 int lastmask = 0;
 int lastkey, lastkeydown;
+int deltamotionx = 0;
+int deltamotiony = 0;
 
-static int keyboard_up;
 uint8_t buttonstate[8];
 
 void HandleKey( int keycode, int bDown )
 {
 	lastkey = keycode;
 	lastkeydown = bDown;
-	if( keycode == 10 && !bDown ) { keyboard_up = 0; AndroidDisplayKeyboard( keyboard_up );  }
 
 	if( keycode == 4 ) { AndroidSendToBack( 1 ); } //Handle Physical Back Button.
 }
@@ -112,138 +41,22 @@ void HandleButton( int x, int y, int button, int bDown )
 	lastbid = button;
 	lastbuttonx = x;
 	lastbuttony = y;
-
-	if( bDown ) { keyboard_up = !keyboard_up; AndroidDisplayKeyboard( keyboard_up ); }
+	deltamotionx = 0;
+	deltamotiony = 0;
 }
 
 void HandleMotion( int x, int y, int mask )
 {
 	lastmask = mask;
+	deltamotionx = x - lastmotionx;
+    deltamotiony = y - lastmotiony;
 	lastmotionx = x;
 	lastmotiony = y;
 }
 
-//writes the text to a file to path (example): /storage/emulated/0/Android/data/org.yourorg.cnfgtest/files
-// You would not normally want to do this, but it's an example of how to do local storage.
-void Log(const char *fmt, ...)
-{
-	const char* getpath = AndroidGetExternalFilesDir();
-	char buffer[2048];
-	snprintf(buffer, sizeof(buffer), "%s/log.txt", getpath);
-	FILE *f = fopen(buffer, "w");
-	if (f == NULL)
-	{
-		exit(1);
-	}
-
-	va_list arg;
-	va_start(arg, fmt);
-	vsnprintf(buffer, sizeof(buffer), fmt, arg);
-	va_end(arg);	
-
-	fprintf(f, "%s\n", buffer);
-
-	fclose(f);
-}
-#define HMX 162
-#define HMY 162
 short screenx, screeny;
-float Heightmap[HMX*HMY];
 
 extern struct android_app * gapp;
-
-void DrawHeightmap()
-{
-	int x, y;
-	//float fdt = ((iframeno++)%(360*10))/10.0;
-
-	mountainangle += .2;
-	if( mountainangle < 0 ) mountainangle += 360;
-	if( mountainangle > 360 ) mountainangle -= 360;
-
-	mountainoffsety = mountainoffsety - ((mountainoffsety-100) * .1);
-
-	float eye[3] = { (float)(sin(mountainangle*(3.14159/180.0))*30*sin(mountainoffsety/100.)), (float)(cos(mountainangle*(3.14159/180.0))*30*sin(mountainoffsety/100.)), (float)(30*cos(mountainoffsety/100.)) };
-	float at[3] = { 0,0, 0 };
-	float up[3] = { 0,0, 1 };
-
-	tdSetViewport( -1, -1, 1, 1, screenx, screeny );
-
-	tdMode( tdPROJECTION );
-	tdIdentity( gSMatrix );
-	tdPerspective( 30, ((float)screenx)/((float)screeny), .1, 200., gSMatrix );
-
-	tdMode( tdMODELVIEW );
-	tdIdentity( gSMatrix );
-	tdTranslate( gSMatrix, 0, 0, -40 );
-	tdLookAt( gSMatrix, eye, at, up );
-
-	float scale = 60./HMX;
-
-	for( x = 0; x < HMX-1; x++ )
-	for( y = 0; y < HMY-1; y++ )
-	{
-		float tx = x-HMX/2;
-		float ty = y-HMY/2;
-		float pta[3];
-		float ptb[3];
-		float ptc[3];
-		float ptd[3];
-
-		float normal[3];
-		float lightdir[3] = { .6, -.6, 1 };
-		float tmp1[3];
-		float tmp2[3];
-
-		RDPoint pto[6];
-
-		pta[0] = (tx+0)*scale; pta[1] = (ty+0)*scale; pta[2] = Heightmap[(x+0)+(y+0)*HMX]*scale;
-		ptb[0] = (tx+1)*scale; ptb[1] = (ty+0)*scale; ptb[2] = Heightmap[(x+1)+(y+0)*HMX]*scale;
-		ptc[0] = (tx+0)*scale; ptc[1] = (ty+1)*scale; ptc[2] = Heightmap[(x+0)+(y+1)*HMX]*scale;
-		ptd[0] = (tx+1)*scale; ptd[1] = (ty+1)*scale; ptd[2] = Heightmap[(x+1)+(y+1)*HMX]*scale;
-
-		tdPSub( pta, ptb, tmp2 );
-		tdPSub( ptc, ptb, tmp1 );
-		tdCross( tmp1, tmp2, normal );
-		tdNormalizeSelf( normal );
-
-		tdFinalPoint( pta, pta );
-		tdFinalPoint( ptb, ptb );
-		tdFinalPoint( ptc, ptc );
-		tdFinalPoint( ptd, ptd );
-
-		if( pta[2] >= 1.0 ) continue;
-		if( ptb[2] >= 1.0 ) continue;
-		if( ptc[2] >= 1.0 ) continue;
-		if( ptd[2] >= 1.0 ) continue;
-
-		if( pta[2] < 0 ) continue;
-		if( ptb[2] < 0 ) continue;
-		if( ptc[2] < 0 ) continue;
-		if( ptd[2] < 0 ) continue;
-
-		pto[0].x = pta[0]; pto[0].y = pta[1];
-		pto[1].x = ptb[0]; pto[1].y = ptb[1];
-		pto[2].x = ptd[0]; pto[2].y = ptd[1];
-
-		pto[3].x = ptc[0]; pto[3].y = ptc[1];
-		pto[4].x = ptd[0]; pto[4].y = ptd[1];
-		pto[5].x = pta[0]; pto[5].y = pta[1];
-
-//		CNFGColor(((x+y)&1)?0xFFFFFF:0x000000);
-
-		float bright = tdDot( normal, lightdir );
-		if( bright < 0 ) bright = 0;
-		CNFGColor( 0xff | ( ( (int)( bright * 90 ) ) << 24 ) );
-
-//		CNFGTackPoly( &pto[0], 3 );		CNFGTackPoly( &pto[3], 3 );
-		CNFGTackSegment( pta[0], pta[1], ptb[0], ptb[1] );
-		CNFGTackSegment( pta[0], pta[1], ptc[0], ptc[1] );
-		CNFGTackSegment( ptb[0], ptb[1], ptc[0], ptc[1] );
-	
-	}
-}
-
 
 int HandleDestroy()
 {
@@ -263,399 +76,207 @@ void HandleResume()
 	suspended = 0;
 }
 
-/*
-void AudioCallback( struct CNFADriver * sd, short * out, short * in, int framesp, int framesr )
-{
-	memset(out, 0, framesp*sizeof(uint16_t));
-	if(suspended) return;
-	if(!buttonstate[1]) return; // play audio only if ~touching with two fingers
-	audio_frequency = 440;
-	for(uint32_t i = 0; i < framesp; i++) {
-		int16_t sample = INT16_MAX * sin(audio_frequency*(2*M_PI)*(stream_offset+i)/SAMPLE_RATE);
-		out[i] = sample;
-	}
-	stream_offset += framesp;
-}
-*/
-
-void MakeNotification( const char * channelID, const char * channelName, const char * title, const char * message )
-{
-	static int id;
-	id++;
-
-	const struct JNINativeInterface * env = 0;
-	const struct JNINativeInterface ** envptr = &env;
-	const struct JNIInvokeInterface ** jniiptr = gapp->activity->vm;
-	const struct JNIInvokeInterface * jnii = *jniiptr;
-
-	jnii->AttachCurrentThread( jniiptr, &envptr, NULL);
-	env = (*envptr);
-
-	jstring channelIDStr = env->NewStringUTF( ENVCALL channelID );
-	jstring channelNameStr = env->NewStringUTF( ENVCALL channelName );
-
-	// Runs getSystemService(Context.NOTIFICATION_SERVICE).
-	jclass NotificationManagerClass = env->FindClass( ENVCALL "android/app/NotificationManager" );
-	jclass activityClass = env->GetObjectClass( ENVCALL gapp->activity->clazz );
-	jmethodID MethodGetSystemService = env->GetMethodID( ENVCALL activityClass, "getSystemService", "(Ljava/lang/String;)Ljava/lang/Object;");
-	jstring notificationServiceName = env->NewStringUTF( ENVCALL "notification" );
-	jobject notificationServiceObj = env->CallObjectMethod( ENVCALL gapp->activity->clazz, MethodGetSystemService, notificationServiceName);
-
-	// create the Notification channel.
-	jclass notificationChannelClass = env->FindClass( ENVCALL "android/app/NotificationChannel" );
-	jmethodID notificationChannelConstructorID = env->GetMethodID( ENVCALL notificationChannelClass, "<init>", "(Ljava/lang/String;Ljava/lang/CharSequence;I)V" );
-	jobject notificationChannelObj = env->NewObject( ENVCALL notificationChannelClass, notificationChannelConstructorID, channelIDStr, channelNameStr, 3 ); // IMPORTANCE_DEFAULT
-	jmethodID createNotificationChannelID = env->GetMethodID( ENVCALL NotificationManagerClass, "createNotificationChannel", "(Landroid/app/NotificationChannel;)V" );
-	env->CallVoidMethod( ENVCALL notificationServiceObj, createNotificationChannelID, notificationChannelObj );
-
-	env->DeleteLocalRef( ENVCALL channelNameStr );
-	env->DeleteLocalRef( ENVCALL notificationChannelObj );
-
-	// Create the Notification builder.
-	jclass classBuilder = env->FindClass( ENVCALL "android/app/Notification$Builder" );
-	jstring titleStr = env->NewStringUTF( ENVCALL title );
-	jstring messageStr = env->NewStringUTF( ENVCALL message );
-	jmethodID eventConstructor = env->GetMethodID( ENVCALL classBuilder, "<init>", "(Landroid/content/Context;Ljava/lang/String;)V" );
-	jobject eventObj = env->NewObject( ENVCALL classBuilder, eventConstructor, gapp->activity->clazz, channelIDStr );
-	jmethodID setContentTitleID = env->GetMethodID( ENVCALL classBuilder, "setContentTitle", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;" );
-	jmethodID setContentTextID = env->GetMethodID( ENVCALL classBuilder, "setContentText", "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;" );
-	jmethodID setSmallIconID = env->GetMethodID( ENVCALL classBuilder, "setSmallIcon", "(I)Landroid/app/Notification$Builder;" );
-
-	// You could do things like setPriority, or setContentIntent if you want it to do something when you click it.
-
-	env->CallObjectMethod( ENVCALL eventObj, setContentTitleID, titleStr );
-	env->CallObjectMethod( ENVCALL eventObj, setContentTextID, messageStr );
-	env->CallObjectMethod( ENVCALL eventObj, setSmallIconID, 17301504 ); // R.drawable.alert_dark_frame
-
-	// eventObj.build()
-	jmethodID buildID = env->GetMethodID( ENVCALL classBuilder, "build", "()Landroid/app/Notification;" );
-	jobject notification = env->CallObjectMethod( ENVCALL eventObj, buildID );
-
-	// NotificationManager.notify(...)
-	jmethodID notifyID = env->GetMethodID( ENVCALL NotificationManagerClass, "notify", "(ILandroid/app/Notification;)V" );
-	env->CallVoidMethod( ENVCALL notificationServiceObj, notifyID, id, notification );
-
-	env->DeleteLocalRef( ENVCALL notification );
-	env->DeleteLocalRef( ENVCALL titleStr );
-	env->DeleteLocalRef( ENVCALL activityClass );
-	env->DeleteLocalRef( ENVCALL messageStr );
-	env->DeleteLocalRef( ENVCALL channelIDStr );
-	env->DeleteLocalRef( ENVCALL NotificationManagerClass );
-	env->DeleteLocalRef( ENVCALL notificationServiceObj );
-	env->DeleteLocalRef( ENVCALL notificationServiceName );
-
-}
-
 void HandleThisWindowTermination()
 {
 	suspended = 1;
 }
 
+#define COLOR_ORANGE (Clay_Color) {225, 138, 50, 255}
+#define COLOR_BLUE (Clay_Color) {111, 173, 162, 255}
 
-uint32_t randomtexturedata[256*256];
-uint32_t webviewdata[500*500];
-char fromJSBuffer[128];
+Image profilePicture = {};
 
-void CheckWebView( void * v )
-{
-	static int runno = 0;
-	WebViewNativeActivityObject * wvn = (WebViewNativeActivityObject*)v;
-	if( WebViewGetProgress( wvn ) != 100 ) return;
+Clay_String profileText = CLAY_STRING("Profile Page one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen");
+Clay_TextElementConfig headerTextConfig = (Clay_TextElementConfig) { .fontId = 1, .fontSize = 16, .textColor = {0,0,0,255} };
 
-	runno++;
-	if( runno == 1 )
-	{
-		// The attach (initial) message payload has no meaning.
-		WebViewPostMessage( wvn, "", 1 );
-	}
-	else
-	{
-		// Invoke JavaScript, which calls a function to send a webmessage
-		// back into C land.
-		WebViewExecuteJavascript( wvn, "SendMessageToC();" );
-		
-		// Send a WebMessage into the JavaScript code.
-		char st[128];
-		sprintf( st, "Into JavaScript %d\n", runno );
-		WebViewPostMessage( wvn, st, 0 );
-	}
+void HandleHeaderButtonInteraction(Clay_ElementId elementId, Clay_PointerData pointerData, intptr_t userData) {
+    if (pointerData.state == CLAY_POINTER_DATA_PRESSED_THIS_FRAME) {
+        // Do some click handling
+    }
 }
 
-jobject g_attachLooper;
-
-void SetupWebView( void * v )
-{
-	WebViewNativeActivityObject * wvn = (WebViewNativeActivityObject*)v;
-
-
-	const struct JNINativeInterface * env = 0;
-	const struct JNINativeInterface ** envptr = &env;
-	const struct JNIInvokeInterface ** jniiptr = gapp->activity->vm;
-	const struct JNIInvokeInterface * jnii = *jniiptr;
-
-	jnii->AttachCurrentThread( jniiptr, &envptr, NULL);
-	env = (*envptr);
-
-	while( g_attachLooper == 0 ) usleep(1);
-	WebViewCreate( wvn, "file:///android_asset/test.html", g_attachLooper, 500, 500 );
-	//WebViewCreate( wvn, "about:blank", g_attachLooper, 500, 500 );
+void RenderHeaderButton(Clay_String text) {
+    CLAY(CLAY_LAYOUT({ .padding = {16, 8} }),
+        CLAY_RECTANGLE({ .color = Clay_Hovered() ? COLOR_BLUE : COLOR_ORANGE }),
+        Clay_OnHover(HandleHeaderButtonInteraction, 1)) {
+        CLAY_TEXT(text, CLAY_TEXT_CONFIG(headerTextConfig));
+    }
 }
 
+Clay_LayoutConfig dropdownTextItemLayout = (Clay_LayoutConfig) { .padding = {8, 4} };
+Clay_RectangleElementConfig dropdownRectangleConfig = (Clay_RectangleElementConfig) { .color = {180, 180, 180, 255} };
+Clay_TextElementConfig dropdownTextElementConfig = (Clay_TextElementConfig) { .fontSize = 24, .textColor = {255,255,255,255} };
 
-pthread_t jsthread;
-
-void * JavscriptThread( void * v )
-{
-	const struct JNINativeInterface * env = 0;
-	const struct JNINativeInterface ** envptr = &env;
-	const struct JNIInvokeInterface ** jniiptr = gapp->activity->vm;
-	const struct JNIInvokeInterface * jnii = *jniiptr;
-
-	jnii->AttachCurrentThread( jniiptr, &envptr, NULL);
-	env = (*envptr);
-
-	// Create a looper on this thread...
-	jclass LooperClass = env->FindClass(envptr, "android/os/Looper");
-	jmethodID myLooperMethod = env->GetStaticMethodID(envptr, LooperClass, "myLooper", "()Landroid/os/Looper;");
-	jobject thisLooper = env->CallStaticObjectMethod( envptr, LooperClass, myLooperMethod );
-	if( !thisLooper )
-	{
-		jmethodID prepareMethod = env->GetStaticMethodID(envptr, LooperClass, "prepare", "()V");
-		env->CallStaticVoidMethod( envptr, LooperClass, prepareMethod );
-		thisLooper = env->CallStaticObjectMethod( envptr, LooperClass, myLooperMethod );
-		g_attachLooper = env->NewGlobalRef(envptr, thisLooper);
-	}
-
-	jmethodID getQueueMethod = env->GetMethodID( envptr, LooperClass, "getQueue", "()Landroid/os/MessageQueue;" );
-	jobject   lque = env->CallObjectMethod( envptr, g_attachLooper, getQueueMethod );
-
-	jclass MessageQueueClass = env->FindClass(envptr, "android/os/MessageQueue");
-	jmethodID nextMethod = env->GetMethodID( envptr, MessageQueueClass, "next", "()Landroid/os/Message;" );
-	
-	jclass MessageClass = env->FindClass(envptr, "android/os/Message");
-	jfieldID objid = env->GetFieldID( envptr, MessageClass, "obj", "Ljava/lang/Object;" );
-	jclass PairClass = env->FindClass(envptr, "android/util/Pair");
-	jfieldID pairfirst  = env->GetFieldID( envptr, PairClass, "first", "Ljava/lang/Object;" );
-
-	while(1)
-	{
-		// Instead of using Looper::loop(), we just call next on the looper object.
-		jobject msg = env->CallObjectMethod( envptr, lque, nextMethod );
-		jobject innerObj = env->GetObjectField( envptr, msg, objid );
-		const char * name;
-		jstring strObj;
-		jclass innerClass;
-		
-		// Check Object Type
-		{
-			innerClass = env->GetObjectClass( envptr, innerObj );
-			jmethodID mid = env->GetMethodID( envptr, innerClass, "getClass", "()Ljava/lang/Class;");
-			jobject clsObj = env->CallObjectMethod( envptr, innerObj, mid );
-			jclass clazzz = env->GetObjectClass( envptr, clsObj );
-			mid = env->GetMethodID(envptr, clazzz, "getName", "()Ljava/lang/String;");
-			strObj = (jstring)env->CallObjectMethod( envptr, clsObj, mid);
-			name = env->GetStringUTFChars( envptr, strObj, 0);
-			env->DeleteLocalRef( envptr, clsObj );
-			env->DeleteLocalRef( envptr, clazzz );
-		}
-
-		if( strcmp( name, "z5" ) == 0 )
-		{
-			// Special, Some Androids (notably Meta Quest) use a different private message type.
-			jfieldID mstrf  = env->GetFieldID( envptr, innerClass, "a", "[B" );
-			jbyteArray jba = (jstring)env->GetObjectField(envptr, innerObj, mstrf );
-			int len = env->GetArrayLength( envptr, jba );
-			jboolean isCopy = 0;
-			jbyte * bufferPtr = env->GetByteArrayElements(envptr, jba, &isCopy);
-
-			if( len >= 6 )
-			{
-				const char *descr = (const char*)bufferPtr + 6;
-				char tcpy[len-5];
-				memcpy( tcpy, descr, len-6 );
-				tcpy[len-6] = 0;
-				snprintf( fromJSBuffer, sizeof( fromJSBuffer)-1, "WebMessage: %s\n", tcpy );
-
-				env->DeleteLocalRef( envptr, jba );
-			}
-		}
-		else
-		{
-			jobject MessagePayload = env->GetObjectField( envptr, innerObj, pairfirst );
-			// MessagePayload is a org.chromium.content_public.browser.MessagePayload
-
-			jclass mpclass = env->GetObjectClass( envptr, MessagePayload );
-
-			// Get field "b" which is the web message payload.
-			// If you are using binary sockets, it will be in `c` and be a byte array.
-			jfieldID mstrf  = env->GetFieldID( envptr, mpclass, "b", "Ljava/lang/String;" );
-			jstring strObjDescr = (jstring)env->GetObjectField(envptr, MessagePayload, mstrf );
-
-			const char *descr = env->GetStringUTFChars( envptr, strObjDescr, 0);
-			snprintf( fromJSBuffer, sizeof( fromJSBuffer)-1, "WebMessage: %s\n", descr );
-
-			env->ReleaseStringUTFChars(envptr, strObjDescr, descr);
-			env->DeleteLocalRef( envptr, strObjDescr );
-			env->DeleteLocalRef( envptr, MessagePayload );
-			env->DeleteLocalRef( envptr, mpclass );
-		}
-		env->ReleaseStringUTFChars(envptr, strObj, name);
-		env->DeleteLocalRef( envptr, strObj );
-		env->DeleteLocalRef( envptr, msg );
-		env->DeleteLocalRef( envptr, innerObj );
-		env->DeleteLocalRef( envptr, innerClass );
-	}
+void RenderDropdownTextItem(int index) {
+    CLAY(CLAY_IDI("ScrollContainerItem", index), CLAY_LAYOUT(dropdownTextItemLayout), CLAY_RECTANGLE(dropdownRectangleConfig)) {
+        CLAY_TEXT(CLAY_STRING("I'm a text field in a scroll container."), &dropdownTextElementConfig);
+    }
 }
 
-void SetupJSThread()
-{
-	pthread_create( &jsthread, 0, JavscriptThread, 0 );
+Clay_RenderCommandArray CreateLayout() {
+    Clay_BeginLayout();
+    CLAY(CLAY_ID("OuterContainer"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW() }, .padding = { 16, 16 }, .childGap = 16 }), CLAY_RECTANGLE({ .color = {200, 200, 200, 255} })) {
+        CLAY(CLAY_ID("SideBar"), CLAY_LAYOUT({ .layoutDirection = CLAY_TOP_TO_BOTTOM, .sizing = { .width = CLAY_SIZING_FIXED(300), .height = CLAY_SIZING_GROW() }, .padding = {16, 16}, .childGap = 16 }), CLAY_RECTANGLE({ .color = {150, 150, 255, 255} })) {
+            CLAY(CLAY_ID("ProfilePictureOuter"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW() }, .padding = { 8, 8 }, .childGap = 8, .childAlignment = { .y = CLAY_ALIGN_Y_CENTER } }), CLAY_RECTANGLE({ .color = {130, 130, 255, 255} })) {
+                CLAY(CLAY_ID("ProfilePicture"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(60), .height = CLAY_SIZING_FIXED(60) } }), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {60, 60} })) {}
+                CLAY_TEXT(profileText, CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {0, 0, 0, 255} }));
+            }
+            CLAY(CLAY_ID("SidebarBlob1"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(50) }}), CLAY_RECTANGLE({ .color = {110, 110, 255, 255} })) {}
+            CLAY(CLAY_ID("SidebarBlob2"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(50) }}), CLAY_RECTANGLE({ .color = {110, 110, 255, 255} })) {}
+            CLAY(CLAY_ID("SidebarBlob3"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(50) }}), CLAY_RECTANGLE({ .color = {110, 110, 255, 255} })) {}
+            CLAY(CLAY_ID("SidebarBlob4"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_FIXED(50) }}), CLAY_RECTANGLE({ .color = {110, 110, 255, 255} })) {}
+        }
+
+        CLAY(CLAY_ID("RightPanel"), CLAY_LAYOUT({ .layoutDirection = CLAY_TOP_TO_BOTTOM, .sizing = { .width = CLAY_SIZING_GROW(), .height = CLAY_SIZING_GROW() }, .childGap = 16 })) {
+            CLAY(CLAY_ID("HeaderBar"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW() }, .childAlignment = { .x = CLAY_ALIGN_X_RIGHT }, .padding = {8, 8}, .childGap = 8 }), CLAY_RECTANGLE({ .color =  {180, 180, 180, 255} })) {
+                RenderHeaderButton(CLAY_STRING("Header Item 1"));
+                RenderHeaderButton(CLAY_STRING("Header Item 2"));
+                RenderHeaderButton(CLAY_STRING("Header Item 3"));
+            }
+            CLAY(CLAY_ID("MainContent"),
+                CLAY_SCROLL({ .vertical = true }),
+                CLAY_LAYOUT({ .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = {16, 16}, .childGap = 16, .sizing = { CLAY_SIZING_GROW() } }),
+                CLAY_RECTANGLE({ .color = {200, 200, 255, 255} }))
+            {
+                 CLAY(CLAY_ID("FloatingContainer"),
+                     CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(300), .height = CLAY_SIZING_FIXED(300) }, .padding = { 16, 16 }}),
+                     CLAY_FLOATING({ .zIndex = 1, .attachment = { CLAY_ATTACH_POINT_CENTER_TOP, CLAY_ATTACH_POINT_CENTER_TOP }, .offset = {0, -16} }),
+                     CLAY_BORDER_OUTSIDE({ .color = {80, 80, 80, 255}, .width = 2 }),
+                     CLAY_RECTANGLE({ .color = {140,80, 200, 200 }})
+                 ) {
+                     CLAY_TEXT(CLAY_STRING("I'm an inline floating container."), CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {255,255,255,255} }));
+                 }
+                 CLAY_TEXT(CLAY_STRING("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt."),
+                     CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {0,0,0,255} }));
+
+                 CLAY(CLAY_ID("Photos2"), CLAY_LAYOUT({ .childGap = 16, .padding = { 16, 16 }}), CLAY_RECTANGLE({ .color = {180, 180, 220, 255} })) {
+                     CLAY(CLAY_ID("Picture4"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(120), .height = CLAY_SIZING_FIXED(120) }}), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {120, 120} })) {}
+                     CLAY(CLAY_ID("Picture5"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(120), .height = CLAY_SIZING_FIXED(120) }}), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {120, 120} })) {}
+                     CLAY(CLAY_ID("Picture6"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(120), .height = CLAY_SIZING_FIXED(120) }}), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {120, 120} })) {}
+                 }
+
+
+                 CLAY_TEXT(CLAY_STRING("Faucibus purus in massa tempor nec. Nec ullamcorper sit amet risus nullam eget felis eget nunc. Diam vulputate ut pharetra sit amet aliquam id diam. Lacus suspendisse faucibus interdum posuere lorem. A diam sollicitudin tempor id. Amet massa vitae tortor condimentum lacinia. Aliquet nibh praesent tristique magna."),
+                     CLAY_TEXT_CONFIG({ .fontSize = 24, .lineHeight = 60, .textColor = {0,0,0,255} }));
+
+                 CLAY_TEXT(CLAY_STRING("Suspendisse in est ante in nibh. Amet venenatis urna cursus eget nunc scelerisque viverra. Elementum sagittis vitae et leo duis ut diam quam nulla. Enim nulla aliquet porttitor lacus. Pellentesque habitant morbi tristique senectus et. Facilisi nullam vehicula ipsum a arcu cursus vitae.\nSem fringilla ut morbi tincidunt. Euismod quis viverra nibh cras pulvinar mattis nunc sed. Velit sed ullamcorper morbi tincidunt ornare massa. Varius quam quisque id diam vel quam. Nulla pellentesque dignissim enim sit amet venenatis. Enim lobortis scelerisque fermentum dui faucibus in. Pretium viverra suspendisse potenti nullam ac tortor vitae. Lectus vestibulum mattis ullamcorper velit sed. Eget mauris pharetra et ultrices neque ornare aenean euismod elementum. Habitant morbi tristique senectus et. Integer vitae justo eget magna fermentum iaculis eu. Semper quis lectus nulla at volutpat diam. Enim praesent elementum facilisis leo. Massa vitae tortor condimentum lacinia quis vel."),
+                     CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {0,0,0,255} }));
+                     
+                 CLAY(CLAY_ID("Photos"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_GROW() }, .childAlignment = { .x = CLAY_ALIGN_X_CENTER, .y = CLAY_ALIGN_Y_CENTER }, .childGap = 16, .padding = {16, 16} }), CLAY_RECTANGLE({ .color = {180, 180, 220, 255} })) {
+                     CLAY(CLAY_ID("Picture2"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(120), .height = CLAY_SIZING_FIXED(120) }}), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {120, 120} })) {}
+                     CLAY(CLAY_ID("Picture1"), CLAY_LAYOUT({ .childAlignment = { .x = CLAY_ALIGN_X_CENTER }, .layoutDirection = CLAY_TOP_TO_BOTTOM, .padding = {8, 8} }), CLAY_RECTANGLE({ .color = {170, 170, 220, 255} })) {
+                         CLAY(CLAY_ID("ProfilePicture2"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(60), .height = CLAY_SIZING_FIXED(60) }}), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {60, 60} })) {}
+                         CLAY_TEXT(CLAY_STRING("Image caption below"), CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {0,0,0,255} }));
+                     }
+                     CLAY(CLAY_ID("Picture3"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(120), .height = CLAY_SIZING_FIXED(120) }}), CLAY_IMAGE({ .imageData = &profilePicture, .sourceDimensions = {120, 120} })) {}
+                 }
+
+                 CLAY_TEXT(CLAY_STRING("Amet cursus sit amet dictum sit amet justo donec. Et malesuada fames ac turpis egestas maecenas. A lacus vestibulum sed arcu non odio euismod lacinia. Gravida neque convallis a cras. Dui nunc mattis enim ut tellus elementum sagittis vitae et. Orci sagittis eu volutpat odio facilisis mauris. Neque gravida in fermentum et sollicitudin ac orci. Ultrices dui sapien eget mi proin sed libero. Euismod quis viverra nibh cras pulvinar mattis. Diam volutpat commodo sed egestas egestas. In fermentum posuere urna nec tincidunt praesent semper. Integer eget aliquet nibh praesent tristique magna.\nId cursus metus aliquam eleifend mi in. Sed pulvinar proin gravida hendrerit lectus a. Etiam tempor orci eu lobortis elementum nibh tellus. Nullam vehicula ipsum a arcu cursus vitae. Elit scelerisque mauris pellentesque pulvinar pellentesque habitant morbi tristique senectus. Condimentum lacinia quis vel eros donec ac odio. Mattis pellentesque id nibh tortor id aliquet lectus. Turpis egestas integer eget aliquet nibh praesent tristique. Porttitor massa id neque aliquam vestibulum morbi. Mauris commodo quis imperdiet massa tincidunt nunc pulvinar sapien et. Nunc scelerisque viverra mauris in aliquam sem fringilla. Suspendisse ultrices gravida dictum fusce ut placerat orci nulla.\nLacus laoreet non curabitur gravida arcu ac tortor dignissim. Urna nec tincidunt praesent semper feugiat nibh sed pulvinar. Tristique senectus et netus et malesuada fames ac. Nunc aliquet bibendum enim facilisis gravida. Egestas maecenas pharetra convallis posuere morbi leo urna molestie. Sapien nec sagittis aliquam malesuada bibendum arcu vitae elementum curabitur. Ac turpis egestas maecenas pharetra convallis posuere morbi leo urna. Viverra vitae congue eu consequat. Aliquet enim tortor at auctor urna. Ornare massa eget egestas purus viverra accumsan in nisl nisi. Elit pellentesque habitant morbi tristique senectus et netus et malesuada.\nSuspendisse ultrices gravida dictum fusce ut placerat orci nulla pellentesque. Lobortis feugiat vivamus at augue eget arcu. Vitae justo eget magna fermentum iaculis eu. Gravida rutrum quisque non tellus orci. Ipsum faucibus vitae aliquet nec. Nullam non nisi est sit amet. Nunc consequat interdum varius sit amet mattis vulputate enim. Sem fringilla ut morbi tincidunt augue interdum. Vitae purus faucibus ornare suspendisse. Massa tincidunt nunc pulvinar sapien et. Fringilla ut morbi tincidunt augue interdum velit euismod in. Donec massa sapien faucibus et. Est placerat in egestas erat imperdiet. Gravida rutrum quisque non tellus. Morbi non arcu risus quis varius quam quisque id diam. Habitant morbi tristique senectus et netus et malesuada fames ac. Eget lorem dolor sed viverra.\nOrnare massa eget egestas purus viverra. Varius vel pharetra vel turpis nunc eget lorem. Consectetur purus ut faucibus pulvinar elementum. Placerat in egestas erat imperdiet sed euismod nisi. Interdum velit euismod in pellentesque massa placerat duis ultricies lacus. Aliquam nulla facilisi cras fermentum odio eu. Est pellentesque elit ullamcorper dignissim cras tincidunt. Nunc sed id semper risus in hendrerit gravida rutrum. A pellentesque sit amet porttitor eget dolor morbi. Pellentesque habitant morbi tristique senectus et netus et malesuada fames. Nisl nunc mi ipsum faucibus vitae aliquet nec ullamcorper. Sed id semper risus in hendrerit gravida. Tincidunt praesent semper feugiat nibh. Aliquet lectus proin nibh nisl condimentum id venenatis a. Enim sit amet venenatis urna cursus eget. In egestas erat imperdiet sed euismod nisi porta lorem mollis. Lacinia quis vel eros donec ac odio tempor orci. Donec pretium vulputate sapien nec sagittis aliquam malesuada bibendum arcu. Erat pellentesque adipiscing commodo elit at.\nEgestas sed sed risus pretium quam vulputate. Vitae congue mauris rhoncus aenean vel elit scelerisque mauris pellentesque. Aliquam malesuada bibendum arcu vitae elementum. Congue mauris rhoncus aenean vel elit scelerisque mauris. Pellentesque dignissim enim sit amet venenatis urna cursus. Et malesuada fames ac turpis egestas sed tempus urna. Vel fringilla est ullamcorper eget nulla facilisi etiam dignissim. Nibh cras pulvinar mattis nunc sed blandit libero. Fringilla est ullamcorper eget nulla facilisi etiam dignissim. Aenean euismod elementum nisi quis eleifend quam adipiscing vitae proin. Mauris pharetra et ultrices neque ornare aenean euismod elementum. Ornare quam viverra orci sagittis eu. Odio ut sem nulla pharetra diam sit amet nisl suscipit. Ornare lectus sit amet est. Ullamcorper sit amet risus nullam eget. Tincidunt lobortis feugiat vivamus at augue eget arcu dictum.\nUrna nec tincidunt praesent semper feugiat nibh. Ut venenatis tellus in metus vulputate eu scelerisque felis. Cursus risus at ultrices mi tempus. In pellentesque massa placerat duis ultricies lacus sed turpis. Platea dictumst quisque sagittis purus. Cras adipiscing enim eu turpis egestas. Egestas sed tempus urna et pharetra pharetra. Netus et malesuada fames ac turpis egestas integer eget aliquet. Ac turpis egestas sed tempus. Sed lectus vestibulum mattis ullamcorper velit sed. Ante metus dictum at tempor commodo ullamcorper a. Augue neque gravida in fermentum et sollicitudin ac. Praesent semper feugiat nibh sed pulvinar proin gravida. Metus aliquam eleifend mi in nulla posuere sollicitudin aliquam ultrices. Neque gravida in fermentum et sollicitudin ac orci phasellus egestas.\nRidiculus mus mauris vitae ultricies. Morbi quis commodo odio aenean. Duis ultricies lacus sed turpis. Non pulvinar neque laoreet suspendisse interdum consectetur. Scelerisque eleifend donec pretium vulputate sapien nec sagittis aliquam. Volutpat est velit egestas dui id ornare arcu odio ut. Viverra tellus in hac habitasse platea dictumst vestibulum rhoncus est. Vestibulum lectus mauris ultrices eros. Sed blandit libero volutpat sed cras ornare. Id leo in vitae turpis massa sed elementum tempus. Gravida dictum fusce ut placerat orci nulla pellentesque. Pretium quam vulputate dignissim suspendisse in. Nisl suscipit adipiscing bibendum est ultricies integer quis auctor. Risus viverra adipiscing at in tellus. Turpis nunc eget lorem dolor sed viverra ipsum. Senectus et netus et malesuada fames ac. Habitasse platea dictumst vestibulum rhoncus est. Nunc sed id semper risus in hendrerit gravida. Felis eget velit aliquet sagittis id. Eget felis eget nunc lobortis.\nMaecenas pharetra convallis posuere morbi leo. Maecenas volutpat blandit aliquam etiam. A condimentum vitae sapien pellentesque habitant morbi tristique senectus et. Pulvinar mattis nunc sed blandit libero volutpat sed. Feugiat in ante metus dictum at tempor commodo ullamcorper. Vel pharetra vel turpis nunc eget lorem dolor. Est placerat in egestas erat imperdiet sed euismod. Quisque non tellus orci ac auctor augue mauris augue. Placerat vestibulum lectus mauris ultrices eros in cursus turpis. Enim nunc faucibus a pellentesque sit. Adipiscing vitae proin sagittis nisl. Iaculis at erat pellentesque adipiscing commodo elit at imperdiet. Aliquam sem fringilla ut morbi.\nArcu odio ut sem nulla pharetra diam sit amet nisl. Non diam phasellus vestibulum lorem sed. At erat pellentesque adipiscing commodo elit at. Lacus luctus accumsan tortor posuere ac ut consequat. Et malesuada fames ac turpis egestas integer. Tristique magna sit amet purus. A condimentum vitae sapien pellentesque habitant. Quis varius quam quisque id diam vel quam. Est ullamcorper eget nulla facilisi etiam dignissim diam quis. Augue interdum velit euismod in pellentesque massa. Elit scelerisque mauris pellentesque pulvinar pellentesque habitant. Vulputate eu scelerisque felis imperdiet. Nibh tellus molestie nunc non blandit massa. Velit euismod in pellentesque massa placerat. Sed cras ornare arcu dui. Ut sem viverra aliquet eget sit. Eu lobortis elementum nibh tellus molestie nunc non. Blandit libero volutpat sed cras ornare arcu dui vivamus.\nSit amet aliquam id diam maecenas. Amet risus nullam eget felis eget nunc lobortis mattis aliquam. Magna sit amet purus gravida. Egestas purus viverra accumsan in nisl nisi. Leo duis ut diam quam. Ante metus dictum at tempor commodo ullamcorper. Ac turpis egestas integer eget. Fames ac turpis egestas integer eget aliquet nibh. Sem integer vitae justo eget magna fermentum. Semper auctor neque vitae tempus quam pellentesque nec nam aliquam. Vestibulum mattis ullamcorper velit sed. Consectetur adipiscing elit duis tristique sollicitudin nibh. Massa id neque aliquam vestibulum morbi blandit cursus risus.\nCursus sit amet dictum sit amet justo donec enim diam. Egestas erat imperdiet sed euismod. Nullam vehicula ipsum a arcu cursus vitae congue mauris. Habitasse platea dictumst vestibulum rhoncus est pellentesque elit. Duis ultricies lacus sed turpis tincidunt id aliquet risus feugiat. Faucibus ornare suspendisse sed nisi lacus sed viverra. Pretium fusce id velit ut tortor pretium viverra. Fermentum odio eu feugiat pretium nibh ipsum consequat nisl vel. Senectus et netus et malesuada. Tellus pellentesque eu tincidunt tortor aliquam. Aenean sed adipiscing diam donec adipiscing tristique risus nec feugiat. Quis vel eros donec ac odio. Id interdum velit laoreet id donec ultrices tincidunt.\nMassa id neque aliquam vestibulum morbi blandit cursus risus at. Enim tortor at auctor urna nunc id cursus metus. Lorem ipsum dolor sit amet consectetur. At quis risus sed vulputate odio. Facilisis mauris sit amet massa vitae tortor condimentum lacinia quis. Et malesuada fames ac turpis egestas maecenas. Bibendum arcu vitae elementum curabitur vitae nunc sed velit dignissim. Viverra orci sagittis eu volutpat odio facilisis mauris. Adipiscing bibendum est ultricies integer quis auctor elit sed. Neque viverra justo nec ultrices dui sapien. Elementum nibh tellus molestie nunc non blandit massa enim. Euismod elementum nisi quis eleifend quam adipiscing vitae proin sagittis. Faucibus ornare suspendisse sed nisi. Quis viverra nibh cras pulvinar mattis nunc sed blandit. Tristique senectus et netus et. Magnis dis parturient montes nascetur ridiculus mus.\nDolor magna eget est lorem ipsum dolor. Nibh sit amet commodo nulla. Donec pretium vulputate sapien nec sagittis aliquam malesuada. Cras adipiscing enim eu turpis egestas pretium. Cras ornare arcu dui vivamus arcu felis bibendum ut tristique. Mus mauris vitae ultricies leo integer. In nulla posuere sollicitudin aliquam ultrices sagittis orci. Quis hendrerit dolor magna eget. Nisl tincidunt eget nullam non. Vitae congue eu consequat ac felis donec et odio. Vivamus at augue eget arcu dictum varius duis at. Ornare quam viverra orci sagittis.\nErat nam at lectus urna duis convallis. Massa placerat duis ultricies lacus sed turpis tincidunt id aliquet. Est ullamcorper eget nulla facilisi etiam dignissim diam. Arcu vitae elementum curabitur vitae nunc sed velit dignissim sodales. Tortor vitae purus faucibus ornare suspendisse sed nisi lacus. Neque viverra justo nec ultrices dui sapien eget mi proin. Viverra accumsan in nisl nisi scelerisque eu ultrices. Consequat interdum varius sit amet mattis. In aliquam sem fringilla ut morbi. Eget arcu dictum varius duis at. Nulla aliquet porttitor lacus luctus accumsan tortor posuere. Arcu bibendum at varius vel pharetra vel turpis. Hac habitasse platea dictumst quisque sagittis purus sit amet. Sapien eget mi proin sed libero enim sed. Quam elementum pulvinar etiam non quam lacus suspendisse faucibus interdum. Semper viverra nam libero justo. Fusce ut placerat orci nulla pellentesque dignissim enim sit amet. Et malesuada fames ac turpis egestas maecenas pharetra convallis posuere.\nTurpis egestas sed tempus urna et pharetra pharetra massa. Gravida in fermentum et sollicitudin ac orci phasellus. Ornare suspendisse sed nisi lacus sed viverra tellus in. Fames ac turpis egestas maecenas pharetra convallis posuere. Mi proin sed libero enim sed faucibus turpis. Sit amet mauris commodo quis imperdiet massa tincidunt nunc. Ut etiam sit amet nisl purus in mollis nunc. Habitasse platea dictumst quisque sagittis purus sit amet volutpat consequat. Eget aliquet nibh praesent tristique magna. Sit amet est placerat in egestas erat. Commodo sed egestas egestas fringilla. Enim nulla aliquet porttitor lacus luctus accumsan tortor posuere ac. Et molestie ac feugiat sed lectus vestibulum mattis ullamcorper. Dignissim convallis aenean et tortor at risus viverra. Morbi blandit cursus risus at ultrices mi. Ac turpis egestas integer eget aliquet nibh praesent tristique magna.\nVolutpat sed cras ornare arcu dui. Egestas erat imperdiet sed euismod nisi porta lorem mollis aliquam. Viverra justo nec ultrices dui sapien. Amet risus nullam eget felis eget nunc lobortis. Metus aliquam eleifend mi in. Ut eu sem integer vitae. Auctor elit sed vulputate mi sit amet. Nisl nisi scelerisque eu ultrices. Dictum fusce ut placerat orci nulla. Pellentesque habitant morbi tristique senectus et. Auctor elit sed vulputate mi sit. Tincidunt arcu non sodales neque. Mi in nulla posuere sollicitudin aliquam. Morbi non arcu risus quis varius quam quisque id diam. Cras adipiscing enim eu turpis egestas pretium aenean pharetra magna. At auctor urna nunc id cursus metus aliquam. Mauris a diam maecenas sed enim ut sem viverra. Nunc scelerisque viverra mauris in. In iaculis nunc sed augue lacus viverra vitae congue eu. Volutpat blandit aliquam etiam erat velit scelerisque in dictum non."),
+                     CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {0,0,0,255} }));
+            }
+        }
+
+        CLAY(CLAY_ID("Blob4Floating2"), CLAY_FLOATING({ .zIndex = 1, .parentId = Clay_GetElementId(CLAY_STRING("SidebarBlob4")).id })) {
+            CLAY(CLAY_ID("ScrollContainer"), CLAY_LAYOUT({ .sizing = { .height = CLAY_SIZING_FIXED(200) }, .childGap = 2 }), CLAY_SCROLL({ .vertical = true })) {
+                CLAY(CLAY_ID("FloatingContainer2"), CLAY_LAYOUT({ }), CLAY_FLOATING({ .zIndex = 1 })) {
+                    CLAY(CLAY_ID("FloatingContainerInner"), CLAY_LAYOUT({ .sizing = { .width = CLAY_SIZING_FIXED(300), .height = CLAY_SIZING_FIXED(300) }, .padding = {16, 16} }), CLAY_RECTANGLE({ .color = {140,80, 200, 200} })) {
+                        CLAY_TEXT(CLAY_STRING("I'm an inline floating container."), CLAY_TEXT_CONFIG({ .fontSize = 24, .textColor = {255,255,255,255} }));
+                    }
+                }
+                CLAY(CLAY_ID("ScrollContainerInner"), CLAY_LAYOUT({ .layoutDirection = CLAY_TOP_TO_BOTTOM }), CLAY_RECTANGLE({ .color = {160, 160, 160, 255} })) {
+                    for (int i = 0; i < 100; i++) {
+                        RenderDropdownTextItem(i);
+                    }
+                }
+            }
+        }
+        
+        Clay_ScrollContainerData scrollData = Clay_GetScrollContainerData(Clay_GetElementId(CLAY_STRING("MainContent")));
+        if (scrollData.found) {
+            CLAY(CLAY_ID("ScrollBar"),
+                CLAY_FLOATING({
+                    .offset = { .y = -(scrollData.scrollPosition->y / scrollData.contentDimensions.height) * scrollData.scrollContainerDimensions.height },
+                    .zIndex = 1,
+                    .parentId = Clay_GetElementId(CLAY_STRING("MainContent")).id,
+                    .attachment = {.element = CLAY_ATTACH_POINT_RIGHT_TOP, .parent = CLAY_ATTACH_POINT_RIGHT_TOP}
+                })
+            ) {
+                CLAY(CLAY_ID("ScrollBarButton"),
+                    CLAY_LAYOUT({ .sizing = {CLAY_SIZING_FIXED(12), CLAY_SIZING_FIXED((scrollData.scrollContainerDimensions.height / scrollData.contentDimensions.height) * scrollData.scrollContainerDimensions.height) }}),
+                    CLAY_RECTANGLE({ .cornerRadius = {6}, .color = Clay_PointerOver(Clay__HashString(CLAY_STRING("ScrollBar"), 0, 0)) ? (Clay_Color){100, 100, 140, 150} : (Clay_Color){120, 120, 160, 150} })
+                ) {}
+            }
+        }
+    }
+    return Clay_EndLayout();
 }
 
 int main( int argc, char ** argv )
 {
-	int x, y;
-	double ThisTime;
-	double LastFPSTime = OGGetAbsoluteTime();
+	double ThisTime = OGGetAbsoluteTime();
 
-	Log( "Starting Up" );
+	printf( "Starting Up" );
 
-	CNFGBGColor = 0x000040ff;
 	CNFGSetupFullscreen( "Test Bench", 0 );
 	
 	HandleWindowTermination = HandleThisWindowTermination;
-
-	for( x = 0; x < HMX; x++ )
-	for( y = 0; y < HMY; y++ )
-	{
-		Heightmap[x+y*HMX] = tdPerlin2D( x, y )*8.;
-	}
-
-	const char * assettext = "Not Found";
-	AAsset * file = AAssetManager_open( gapp->activity->assetManager, "asset.txt", AASSET_MODE_BUFFER );
-	if( file )
-	{
-		size_t fileLength = AAsset_getLength(file);
-		char * temp = (char*)malloc( fileLength + 1);
-		memcpy( temp, AAsset_getBuffer( file ), fileLength );
-		temp[fileLength] = 0;
-		assettext = temp;
-	}
-
-	SetupIMU();
 	
-	// Disabled, for now.
-	//InitCNFAAndroid( AudioCallback, "A Name", SAMPLE_RATE, 0, 1, 0, SAMPLE_COUNT, 0, 0, 0 );
+	AAsset * profilePictureAsset = AAssetManager_open( gapp->activity->assetManager, "profile-picture.bmp", AASSET_MODE_BUFFER );
+	if( profilePictureAsset )
+	{
+		size_t fileLength = AAsset_getLength(profilePictureAsset);
+		const char * buffer = AAsset_getBuffer( profilePictureAsset );
+		
+		uint32_t * imageMemory = (uint32_t*)malloc( fileLength );
+		uint64_t imageMemoryPosition = (fileLength - 54) / 4;
+		
+		for (uint64_t i = 54; i < fileLength; i += 4, imageMemoryPosition--) {
+		    uint8_t a = buffer[i+0];
+		    uint8_t r = buffer[i+1];
+		    uint8_t g = buffer[i+2];
+		    uint8_t b = buffer[i+3];
+		
+		    imageMemory[imageMemoryPosition] = (r << 24) + (g << 16) + (b << 8) + a;
+		}
 
-	SetupJSThread();
-
-	// Create webview and wait for its completion
-	RunCallbackOnUIThread( SetupWebView, &MyWebView );
-	while( !MyWebView.WebViewObject ) usleep(1);
-
-	Log( "Startup Complete" );
+		profilePicture.width = (buffer[21] << 24) + (buffer[20] << 16) + (buffer[19] << 8) + buffer[18];
+		profilePicture.height = (buffer[25] << 24) + (buffer[24] << 16) + (buffer[23] << 8) + buffer[22];
+		profilePicture.data = imageMemory;
+	}
+	
+	uint64_t totalMemorySize = Clay_MinMemorySize();
+    Clay_Arena clayMemory = (Clay_Arena) { .label = CLAY_STRING("Clay Memory Arena"), .capacity = totalMemorySize, .memory = (char *)malloc(totalMemorySize) };
+    Clay_SetMeasureTextFunction(CNFG_MeasureText);
+    Clay_Initialize(clayMemory, (Clay_Dimensions) {0,0});
+    
+	printf( "Startup Complete" );
 
 	while(1)
 	{
-		int i;
-		iframeno++;
-
-		if( iframeno == 200 )
-		{
-			MakeNotification( "default", "rawdraw alerts", "rawdraw", "Hit frame two hundred\nNew Line" );
-		}
-
 		CNFGHandleInput();
-		AccCheck();
 
 		if( suspended ) { usleep(50000); continue; }
 
-		RunCallbackOnUIThread( (void(*)(void*))WebViewRequestRenderToCanvas, &MyWebView );
-		RunCallbackOnUIThread( CheckWebView, &MyWebView );
-
+		CNFGGetDimensions( &screenx, &screeny );
+		
+		// Draw UI
+        //Clay_SetDebugModeEnabled(true);
+		Clay_Vector2 mousePosition = (Clay_Vector2) { .x = lastmotionx, .y = lastmotiony };
+		Clay_SetPointerState(mousePosition, buttonstate[0]);
+		Clay_SetLayoutDimensions((Clay_Dimensions) { (float)screenx, (float)screeny });
+		Clay_UpdateScrollContainers(true, (Clay_Vector2) { .x = deltamotionx, .y = deltamotiony }, OGGetAbsoluteTime()-ThisTime);
+		
+		Clay_RenderCommandArray layout = CreateLayout();
+		
 		CNFGClearFrame();
 		CNFGColor( 0xFFFFFFFF );
-		CNFGGetDimensions( &screenx, &screeny );
-
-		// Mesh in background
-		CNFGSetLineWidth( 9 );
-		DrawHeightmap();
-		CNFGPenX = 0; CNFGPenY = 400;
-		CNFGColor( 0xffffffff );
-		CNFGDrawText( assettext, 15 );
-		CNFGFlushRender();
-
-		CNFGPenX = 0; CNFGPenY = 480;
-		char st[50];
-		sprintf( st, "%dx%d %d %d %d %d %d %d\n%d %d\n%5.2f %5.2f %5.2f %d", screenx, screeny, lastbuttonx, lastbuttony, lastmotionx, lastmotiony, lastkey, lastkeydown, lastbid, lastmask, accx, accy, accz, accs );
-		CNFGDrawText( st, 10 );
-		CNFGSetLineWidth( 2 );
-
-		// Square behind text
-		CNFGColor( 0x303030ff );
-		CNFGTackRectangle( 600, 0, 950, 350);
-
-		CNFGPenX = 10; CNFGPenY = 10;
-
-		// Text
-		CNFGColor( 0xffffffff );
-		for( i = 0; i < 1; i++ )
-		{
-			int c;
-			char tw[2] = { 0, 0 };
-			for( c = 0; c < 256; c++ )
-			{
-				tw[0] = c;
-
-				CNFGPenX = ( c % 16 ) * 20+606;
-				CNFGPenY = ( c / 16 ) * 20+5;
-				CNFGDrawText( tw, 4 );
-			}
-		}
-
-		// Green triangles
-		CNFGPenX = 0;
-		CNFGPenY = 0;
-		CNFGColor( 0x00FF00FF );
-
-		for( i = 0; i < 400; i++ )
-		{
-			RDPoint pp[3];
-			pp[0].x = (short)(50*sin((float)(i+iframeno)*.01) + (i%20)*30);
-			pp[0].y = (short)(50*cos((float)(i+iframeno)*.01) + (i/20)*20)+700;
-			pp[1].x = (short)(20*sin((float)(i+iframeno)*.01) + (i%20)*30);
-			pp[1].y = (short)(50*cos((float)(i+iframeno)*.01) + (i/20)*20)+700;
-			pp[2].x = (short)(10*sin((float)(i+iframeno)*.01) + (i%20)*30);
-			pp[2].y = (short)(30*cos((float)(i+iframeno)*.01) + (i/20)*20)+700;
-			CNFGTackPoly( pp, 3 );
-		}
-
-		// Last WebMessage
-		CNFGColor( 0xFFFFFFFF );
-		CNFGPenX = 0; CNFGPenY = 100;
-		CNFGDrawText( fromJSBuffer, 6 );
-
-		int x, y;
-		for( y = 0; y < 256; y++ )
-		for( x = 0; x < 256; x++ )
-			randomtexturedata[x+y*256] = x | ((x*394543L+y*355+iframeno*3)<<8);
-		CNFGBlitImage( randomtexturedata, 100, 600, 256, 256 );
-
-		WebViewNativeGetPixels( &MyWebView, webviewdata, 500, 500 );
-		CNFGBlitImage( webviewdata, 500, 640, 500, 500 );
-
-		frames++;
+		CNFGPenX = 0; CNFGPenY = 0;
+        Clay_CNFG_Render(layout);
+        
 		//On Android, CNFGSwapBuffers must be called, and CNFGUpdateScreenWithBitmap does not have an implied framebuffer swap.
 		CNFGSwapBuffers();
 
 		ThisTime = OGGetAbsoluteTime();
-		if( ThisTime > LastFPSTime + 1 )
-		{
-			printf( "FPS: %d\n", frames );
-			frames = 0;
-			LastFPSTime+=1;
-		}
-
 	}
 
 	return(0);

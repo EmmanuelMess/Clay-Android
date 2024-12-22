@@ -4,3 +4,6 @@
 [submodule "cnfa"]
 	path = cnfa
 	url = https://github.com/cntools/cnfa
+[submodule "clay"]
+	path = clay
+	url = https://github.com/nicbarker/clay.git
