@@ -1,9 +1,6 @@
-[![rawdrawandroid](https://github.com/cnlohr/rawdrawandroid/actions/workflows/install.yml/badge.svg)](https://github.com/dreua/rawdrawandroid/actions/workflows/install.yml)
-
-### Update: Works with OpenXR [on Meta Quest](https://github.com/cnlohr/tsopenxr/tree/master/meta_quest)!
-
 # Table of Contents
 
+  - [Clay](#clay)
   - [rawdrawandroid](#rawdrawandroid)
   - [why?](#why)
   - [Development Environment](#development-environment)
@@ -22,6 +19,14 @@
     - [Prepping your app for upload.](#prepping-your-app-for-upload)
     - [Pre-SDK-32-Tools](#pre-sdk-32-tools)
   - [TODO](#todo)
+
+# Clay
+
+Initial implementation of [Clay](https://github.com/nicbarker/clay) for Android using rawdrawandroid to allow you to implement a full UI with only C.
+
+<img src="images/sample.png" height="600px"/>
+
+This is just a proof of concept, but the implemented parts fully work.
 
 # rawdrawandroid
 
@@ -308,7 +313,6 @@ Try a bunch of these cool priveleges, see what they all do.
 * permission.WRITE_MEDIA_STORAGE
 * android.permission.VR
 * android.permission.INSTALL_PACKAGES
-
 
 
 
