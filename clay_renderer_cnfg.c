@@ -82,6 +82,7 @@ void Clay_CNFG_Render(short width, short height, Clay_RenderCommandArray renderC
                 CNFGPenX = boundingBox.x; CNFGPenY = boundingBox.y;
                 CNFGColor( CLAY_COLOR_TO_CNFG_COLOR(renderCommand->config.textElementConfig->textColor) );
                 CNFGDrawText(cloned, pixelSize);
+                CNFGFlushRender();
                 
                 free(cloned);
                 break;
@@ -102,23 +103,25 @@ void Clay_CNFG_Render(short width, short height, Clay_RenderCommandArray renderC
                 }
             
                 CNFGBlitImage( resized, boundingBox.x, boundingBox.y, boundingBox.width, boundingBox.height);
+                CNFGFlushRender();
                 
                 free(resized);
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
-                //glScissor((int)roundf(boundingBox.x), height - (int)roundf(boundingBox.y + boundingBox.height), (int)roundf(boundingBox.width), (int)roundf(boundingBox.height));
-                //glEnable(GL_SCISSOR_TEST);
+                glScissor((int)roundf(boundingBox.x), height - (int)roundf(boundingBox.y + boundingBox.height), (int)roundf(boundingBox.width), (int)roundf(boundingBox.height));
+                glEnable(GL_SCISSOR_TEST);
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
-                //glDisable(GL_SCISSOR_TEST);
+                glDisable(GL_SCISSOR_TEST);
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
                 Clay_RectangleElementConfig *config = renderCommand->config.rectangleElementConfig;
                 
                 CNFG_DrawRectangle(boundingBox.x, boundingBox.y, boundingBox.width, boundingBox.height, CLAY_COLOR_TO_CNFG_COLOR(config->color));
+                CNFGFlushRender();
 
 		        if (config->cornerRadius.topLeft > 0) {
                     //TODO
@@ -155,6 +158,8 @@ void Clay_CNFG_Render(short width, short height, Clay_RenderCommandArray renderC
                 if (config->cornerRadius.bottomRight > 0) {
                     //TODO DrawRing((Vector2) { roundf(boundingBox.x + boundingBox.width - config->cornerRadius.bottomRight), roundf(boundingBox.y + boundingBox.height - config->cornerRadius.bottomRight) }, roundf(config->cornerRadius.bottomRight - config->bottom.width), config->cornerRadius.bottomRight, 0.1, 90, 10, CLAY_COLOR_TO_RAYLIB_COLOR(config->bottom.color));
                 }
+                
+                CNFGFlushRender();
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_CUSTOM: {
