@@ -61,7 +61,7 @@ void Clay_CNFG_Initialize(int width, int height, const char *title, unsigned int
     //TODO
 }
 
-void Clay_CNFG_Render(Clay_RenderCommandArray renderCommands)
+void Clay_CNFG_Render(short width, short height, Clay_RenderCommandArray renderCommands)
 {
     for (int j = 0; j < renderCommands.length; j++)
     {
@@ -107,11 +107,12 @@ void Clay_CNFG_Render(Clay_RenderCommandArray renderCommands)
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_SCISSOR_START: {
-                //TODO BeginScissorMode((int)roundf(boundingBox.x), (int)roundf(boundingBox.y), (int)roundf(boundingBox.width), (int)roundf(boundingBox.height));
+                //glScissor((int)roundf(boundingBox.x), height - (int)roundf(boundingBox.y + boundingBox.height), (int)roundf(boundingBox.width), (int)roundf(boundingBox.height));
+                //glEnable(GL_SCISSOR_TEST);
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_SCISSOR_END: {
-                //TODO EndScissorMode();
+                //glDisable(GL_SCISSOR_TEST);
                 break;
             }
             case CLAY_RENDER_COMMAND_TYPE_RECTANGLE: {
